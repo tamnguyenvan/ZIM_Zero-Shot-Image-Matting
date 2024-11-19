@@ -222,141 +222,140 @@ def download_onnx_weights(repo_id="naver-iv/zim-anything-vitl", file_dir="zim_vi
     return os.path.dirname(filepath)
 
 
-if __name__ == "__main__":
-    backbone = "vit_l"
-    model = zim_model_registry[backbone](checkpoint=download_onnx_weights())
+backbone = "vit_l"
+model = zim_model_registry[backbone](checkpoint=download_onnx_weights())
+
+if torch.cuda.is_available():
+    model.cuda()
+
+predictor = ZimPredictor(model)
+mask_generator = ZimAutomaticMaskGenerator(
+    model, 
+    pred_iou_thresh=0.7, 
+    points_per_batch=8,
+    stability_score_thresh=0.9, 
+)
+
+with gr.Blocks() as demo:
+    gr.Markdown("# <center> [Demo] ZIM: Zero-Shot Image Matting for Anything")
+
+    prompts = gr.State(dict())
+    img = gr.Image(visible=False)
+    example_image = gr.Image(visible=False)
     
-    if torch.cuda.is_available():
-        model.cuda()
-    
-    predictor = ZimPredictor(model)
-    mask_generator = ZimAutomaticMaskGenerator(
-        model, 
-        pred_iou_thresh=0.7, 
-        points_per_batch=8,
-        stability_score_thresh=0.9, 
+    with gr.Row():
+        with gr.Column():
+            # Point and Bbox prompt
+            with gr.Tab(label="Point or Box"):
+                img_with_point_or_box = ImagePrompter(
+                    label="query image", 
+                    sources="upload"
+                )
+                interactions = "Left Click (Pos) | Middle/Right Click (Neg) | Press Move (Box)"
+                gr.Markdown("<h3 style='text-align: center'> {} </h3>".format(interactions))
+                run_bttn = gr.Button("Run")
+                amg_bttn = gr.Button("Automatic Mask Generation")
+                
+            # Scribble prompt
+            with gr.Tab(label="Scribble"):
+                img_with_scribble = gr.ImageEditor(
+                    label="Scribble", 
+                    brush=gr.Brush(colors=["#00FF00"], default_size=15),
+                    sources="upload", 
+                    transforms=None, 
+                    layers=False
+                )
+                interactions = "Press Move (Scribble)"
+                gr.Markdown("<h3 style='text-align: center'> Step 1. Select Draw button </h3>")
+                gr.Markdown("<h3 style='text-align: center'> Step 2. {} </h3>".format(interactions))
+                scribble_bttn = gr.Button("Run")
+                scribble_reset_bttn = gr.Button("Reset Scribbles")
+                amg_scribble_bttn = gr.Button("Automatic Mask Generation")
+            
+            # Example image
+            gr.Examples(get_examples(), inputs=[example_image])
+
+        # with gr.Row():
+        with gr.Column():
+            with gr.Tab(label="ZIM Image"):
+                img_with_zim_mask = gr.Image(
+                    label="ZIM Image", 
+                    interactive=False
+                )
+
+            with gr.Tab(label="ZIM Mask"):
+                zim_mask = gr.Image(
+                    label="ZIM Mask", 
+                    image_mode="L", 
+                    interactive=False
+                )
+            with gr.Tab(label="ZIM Auto Mask"):
+                zim_amg = gr.Image(
+                    label="ZIM Auto Mask", 
+                    interactive=False
+                )
+                
+    example_image.change(
+        reset_example_image,
+        [example_image, prompts],
+        [
+            img,
+            img_with_point_or_box,
+            img_with_scribble,
+            img_with_zim_mask,
+            zim_amg,
+            zim_mask,
+            prompts,
+        ]
+    )
+
+    img_with_point_or_box.upload(
+        reset_image,
+        [img_with_point_or_box, prompts],
+        [
+            img,
+            img_with_scribble,
+            img_with_zim_mask,
+            zim_amg,
+            zim_mask,
+            prompts,
+        ],
+    )
+
+    amg_bttn.click(
+        run_amg,
+        [img],
+        [zim_amg]
+    )
+    amg_scribble_bttn.click(
+        run_amg,
+        [img],
+        [zim_amg]
     )
     
-    with gr.Blocks() as demo:
-        gr.Markdown("# <center> [Demo] ZIM: Zero-Shot Image Matting for Anything")
+    run_bttn.click(
+        get_point_or_box_prompts,
+        [img_with_point_or_box, prompts],
+        [img, zim_mask, prompts]
+    )
 
-        prompts = gr.State(dict())
-        img = gr.Image(visible=False)
-        example_image = gr.Image(visible=False)
-        
-        with gr.Row():
-            with gr.Column():
-                # Point and Bbox prompt
-                with gr.Tab(label="Point or Box"):
-                    img_with_point_or_box = ImagePrompter(
-                        label="query image", 
-                        sources="upload"
-                    )
-                    interactions = "Left Click (Pos) | Middle/Right Click (Neg) | Press Move (Box)"
-                    gr.Markdown("<h3 style='text-align: center'> {} </h3>".format(interactions))
-                    run_bttn = gr.Button("Run")
-                    amg_bttn = gr.Button("Automatic Mask Generation")
-                    
-                # Scribble prompt
-                with gr.Tab(label="Scribble"):
-                    img_with_scribble = gr.ImageEditor(
-                        label="Scribble", 
-                        brush=gr.Brush(colors=["#00FF00"], default_size=15),
-                        sources="upload", 
-                        transforms=None, 
-                        layers=False
-                    )
-                    interactions = "Press Move (Scribble)"
-                    gr.Markdown("<h3 style='text-align: center'> Step 1. Select Draw button </h3>")
-                    gr.Markdown("<h3 style='text-align: center'> Step 2. {} </h3>".format(interactions))
-                    scribble_bttn = gr.Button("Run")
-                    scribble_reset_bttn = gr.Button("Reset Scribbles")
-                    amg_scribble_bttn = gr.Button("Automatic Mask Generation")
-                
-                # Example image
-                gr.Examples(get_examples(), inputs=[example_image])
+    zim_mask.change(
+        draw_images,
+        [img, zim_mask, prompts],
+        [
+            img, img_with_zim_mask, 
+        ],
+    )
+    scribble_reset_bttn.click(
+        reset_scribble,
+        [img, img_with_scribble,  prompts],
+        [img_with_scribble, zim_mask],
+    )
+    scribble_bttn.click(
+        update_scribble,
+        [img, img_with_scribble,  prompts],
+        [zim_mask, prompts],
+    )
 
-            # with gr.Row():
-            with gr.Column():
-                with gr.Tab(label="ZIM Image"):
-                    img_with_zim_mask = gr.Image(
-                        label="ZIM Image", 
-                        interactive=False
-                    )
-
-                with gr.Tab(label="ZIM Mask"):
-                    zim_mask = gr.Image(
-                        label="ZIM Mask", 
-                        image_mode="L", 
-                        interactive=False
-                    )
-                with gr.Tab(label="ZIM Auto Mask"):
-                    zim_amg = gr.Image(
-                        label="ZIM Auto Mask", 
-                        interactive=False
-                    )
-                    
-        example_image.change(
-            reset_example_image,
-            [example_image, prompts],
-            [
-                img,
-                img_with_point_or_box,
-                img_with_scribble,
-                img_with_zim_mask,
-                zim_amg,
-                zim_mask,
-                prompts,
-            ]
-        )
-
-        img_with_point_or_box.upload(
-            reset_image,
-            [img_with_point_or_box, prompts],
-            [
-                img,
-                img_with_scribble,
-                img_with_zim_mask,
-                zim_amg,
-                zim_mask,
-                prompts,
-            ],
-        )
-
-        amg_bttn.click(
-            run_amg,
-            [img],
-            [zim_amg]
-        )
-        amg_scribble_bttn.click(
-            run_amg,
-            [img],
-            [zim_amg]
-        )
-        
-        run_bttn.click(
-            get_point_or_box_prompts,
-            [img_with_point_or_box, prompts],
-            [img, zim_mask, prompts]
-        )
-
-        zim_mask.change(
-            draw_images,
-            [img, zim_mask, prompts],
-            [
-                img, img_with_zim_mask, 
-            ],
-        )
-        scribble_reset_bttn.click(
-            reset_scribble,
-            [img, img_with_scribble,  prompts],
-            [img_with_scribble, zim_mask],
-        )
-        scribble_bttn.click(
-            update_scribble,
-            [img, img_with_scribble,  prompts],
-            [zim_mask, prompts],
-        )
-
-    demo.queue()
-    demo.launch()
+demo.queue()
+demo.launch()
